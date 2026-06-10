@@ -19,8 +19,16 @@ TG_BASE = "https://api.telegram.org"
 MORALIS_BASE = "https://deep-index.moralis.io/api/v2.2"
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
-CHANNEL_ID = os.getenv("CHANNEL_ID", "")
-SELL_CHANNEL_ID = os.getenv("SELL_CHANNEL_ID", CHANNEL_ID)
+
+# Channel setup
+# GLOBAL_CHANNEL_ID: English public/global channel
+# TR_CHANNEL_ID: Turkish channel
+# CHANNEL_ID and SELL_CHANNEL_ID are kept as backward-compatible fallbacks.
+GLOBAL_CHANNEL_ID = os.getenv("GLOBAL_CHANNEL_ID", os.getenv("CHANNEL_ID", ""))
+TR_CHANNEL_ID = os.getenv("TR_CHANNEL_ID", "")
+CHANNEL_ID = os.getenv("CHANNEL_ID", GLOBAL_CHANNEL_ID)
+SELL_CHANNEL_ID = os.getenv("SELL_CHANNEL_ID", GLOBAL_CHANNEL_ID or CHANNEL_ID)
+
 
 PROJECT_NAME = os.getenv("PROJECT_NAME", "DOLPHIN")
 
@@ -536,6 +544,7 @@ def build_message(
     wallet: str,
     wallet_balance: Optional[float],
     holders: Optional[int],
+    language: str = "en",
 ) -> str:
     base = pair.get("baseToken") or {}
     quote = pair.get("quoteToken") or {}
@@ -558,24 +567,36 @@ def build_message(
     usd_value = token_amount * price_usd
     quote_amount = token_amount * price_native
 
+    is_tr = language.lower().startswith("tr")
     lines: List[str] = []
 
     if event_type == "buy":
-        lines.append(f"🟢 {escape_md(PROJECT_NAME)} BUY!")
+        lines.append(f"🐬🟢 {escape_md(PROJECT_NAME)} {'ALIM!' if is_tr else 'BUY!'}")
         lines.append("")
-        lines.append(f"💵 Spent: {quote_amount:,.6f} {quote_symbol} ({fmt_money(usd_value)})")
-        lines.append(f"🪙 Got: {fmt_number(token_amount)} {base_symbol}")
-        lines.append(f"📈 Price: {fmt_money(price_usd)}")
+        if is_tr:
+            lines.append(f"💵 Harcanan: {quote_amount:,.6f} {quote_symbol} ({fmt_money(usd_value)})")
+            lines.append(f"🪙 Alınan: {fmt_number(token_amount)} {base_symbol}")
+            lines.append(f"📈 Fiyat: {fmt_money(price_usd)}")
+        else:
+            lines.append(f"💵 Spent: {quote_amount:,.6f} {quote_symbol} ({fmt_money(usd_value)})")
+            lines.append(f"🪙 Got: {fmt_number(token_amount)} {base_symbol}")
+            lines.append(f"📈 Price: {fmt_money(price_usd)}")
     else:
-        lines.append(f"🔴 {escape_md(PROJECT_NAME)} SELL!")
+        lines.append(f"🔴 {escape_md(PROJECT_NAME)} {'SATIŞ!' if is_tr else 'SELL!'}")
         lines.append("")
-        lines.append(f"🪙 Sold: {fmt_number(token_amount)} {base_symbol}")
-        lines.append(f"💰 Value: {quote_amount:,.6f} {quote_symbol} ({fmt_money(usd_value)})")
-        lines.append(f"📉 Price: {fmt_money(price_usd)}")
+        if is_tr:
+            lines.append(f"🪙 Satılan: {fmt_number(token_amount)} {base_symbol}")
+            lines.append(f"💰 Değer: {quote_amount:,.6f} {quote_symbol} ({fmt_money(usd_value)})")
+            lines.append(f"📉 Fiyat: {fmt_money(price_usd)}")
+        else:
+            lines.append(f"🪙 Sold: {fmt_number(token_amount)} {base_symbol}")
+            lines.append(f"💰 Value: {quote_amount:,.6f} {quote_symbol} ({fmt_money(usd_value)})")
+            lines.append(f"📉 Price: {fmt_money(price_usd)}")
 
     if wallet_balance is not None:
         wallet_value = wallet_balance * price_usd
-        lines.append(f"👤 Holdings: {fmt_number(wallet_balance)} {base_symbol} ({fmt_money(wallet_value)})")
+        label = "Cüzdan Bakiyesi" if is_tr else "Holdings"
+        lines.append(f"👤 {label}: {fmt_number(wallet_balance)} {base_symbol} ({fmt_money(wallet_value)})")
 
     if holders is not None:
         lines.append(f"👥 Holders: {holders:,}")
@@ -583,10 +604,12 @@ def build_message(
     lines.append(f"🏪 DEX: {dex_id}")
 
     if liquidity_usd is not None:
-        lines.append(f"💧 Liquidity: {fmt_money(float(liquidity_usd))}")
+        label = "Likidite" if is_tr else "Liquidity"
+        lines.append(f"💧 {label}: {fmt_money(float(liquidity_usd))}")
 
     if market_cap is not None:
-        lines.append(f"🏦 Market Cap: {fmt_money(float(market_cap))}")
+        label = "Market Değeri" if is_tr else "Market Cap"
+        lines.append(f"🏦 {label}: {fmt_money(float(market_cap))}")
 
     lines.append("")
     lines.append(f"👛 Wallet: `{wallet}`")
@@ -597,6 +620,71 @@ def build_message(
 
     return "\n".join(lines)
 
+
+def send_event_to_channels(
+    pair: Dict[str, Any],
+    transfer: Dict[str, Any],
+    event_type: str,
+    wallet: str,
+    wallet_balance: Optional[float],
+    holders: Optional[int],
+) -> None:
+    """Send one detected event to configured channels.
+
+    Buy messages can use animation/photo. Sell messages default to text if SELL_MEDIA_MODE=text.
+    Global channel receives English; TR channel receives Turkish.
+    """
+    if event_type == "buy" and not ANNOUNCE_BUYS:
+        logger.info("BUY algılandı ama ANNOUNCE_BUYS=false: %s", transfer.get("tx_hash"))
+        return
+
+    if event_type == "sell" and not ANNOUNCE_SELLS:
+        logger.info("SELL algılandı ama ANNOUNCE_SELLS=false: %s", transfer.get("tx_hash"))
+        return
+
+    sent_any = False
+
+    if GLOBAL_CHANNEL_ID:
+        msg_en = build_message(
+            pair=pair,
+            transfer=transfer,
+            event_type=event_type,
+            wallet=wallet,
+            wallet_balance=wallet_balance,
+            holders=holders,
+            language="en",
+        )
+        send_telegram(msg_en, GLOBAL_CHANNEL_ID, event_type)
+        sent_any = True
+        logger.info("%s alert Global kanala gönderildi: %s", event_type.upper(), transfer.get("tx_hash"))
+
+    if TR_CHANNEL_ID:
+        msg_tr = build_message(
+            pair=pair,
+            transfer=transfer,
+            event_type=event_type,
+            wallet=wallet,
+            wallet_balance=wallet_balance,
+            holders=holders,
+            language="tr",
+        )
+        send_telegram(msg_tr, TR_CHANNEL_ID, event_type)
+        sent_any = True
+        logger.info("%s alert TR kanala gönderildi: %s", event_type.upper(), transfer.get("tx_hash"))
+
+    if not sent_any:
+        fallback_channel = CHANNEL_ID if event_type == "buy" else SELL_CHANNEL_ID
+        msg = build_message(
+            pair=pair,
+            transfer=transfer,
+            event_type=event_type,
+            wallet=wallet,
+            wallet_balance=wallet_balance,
+            holders=holders,
+            language="en",
+        )
+        send_telegram(msg, fallback_channel, event_type)
+        logger.info("%s alert fallback kanala gönderildi: %s", event_type.upper(), transfer.get("tx_hash"))
 
 def process_transfers(
     transfers: List[Dict[str, Any]],
@@ -680,15 +768,6 @@ def process_transfers(
 
         wallet_balance = get_wallet_token_balance(wallet)
 
-        msg = build_message(
-            pair=pair,
-            transfer=selected_transfer,
-            event_type=event_type,
-            wallet=wallet,
-            wallet_balance=wallet_balance,
-            holders=holders,
-        )
-
         if not BOT_ENABLED:
             logger.info(
                 "PASIF MOD | %s algılandı ama Telegram'a gönderilmedi: %s | value=%s",
@@ -699,18 +778,14 @@ def process_transfers(
             seen_hashes.add(tx_hash)
             continue
 
-        if event_type == "buy":
-            if ANNOUNCE_BUYS:
-                send_telegram(msg, CHANNEL_ID, "buy")
-                logger.info("BUY alert gönderildi: %s", tx_hash)
-            else:
-                logger.info("BUY algılandı ama ANNOUNCE_BUYS=false: %s", tx_hash)
-        else:
-            if ANNOUNCE_SELLS:
-                send_telegram(msg, SELL_CHANNEL_ID, "sell")
-                logger.info("SELL alert gönderildi: %s", tx_hash)
-            else:
-                logger.info("SELL algılandı ama ANNOUNCE_SELLS=false: %s", tx_hash)
+        send_event_to_channels(
+            pair=pair,
+            transfer=selected_transfer,
+            event_type=event_type,
+            wallet=wallet,
+            wallet_balance=wallet_balance,
+            holders=holders,
+        )
 
         seen_hashes.add(tx_hash)
 
@@ -721,8 +796,9 @@ def main() -> None:
     global last_price_refresh
 
     logger.info("DOLPHIN BUY/SELL BOT RPC başladı.")
-    logger.info("Bot version: DOLPHIN-BUY-SELL-BOT/1.0-PASSIVE-READY")
+    logger.info("Bot version: DOLPHIN-BUY-SELL-BOT/1.1-BILINGUAL-PASSIVE-READY")
     logger.info("BOT_ENABLED=%s | ANNOUNCE_BUYS=%s | ANNOUNCE_SELLS=%s", BOT_ENABLED, ANNOUNCE_BUYS, ANNOUNCE_SELLS)
+    logger.info("GLOBAL_CHANNEL_ID=%s | TR_CHANNEL_ID=%s", GLOBAL_CHANNEL_ID or "Yok", TR_CHANNEL_ID or "Yok")
     logger.info("DEX adresleri: %s", ",".join(sorted(DEX_ADDRESSES)) if DEX_ADDRESSES else "Henüz girilmedi")
 
     latest_block = get_latest_block()
