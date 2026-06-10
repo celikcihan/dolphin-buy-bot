@@ -796,7 +796,7 @@ def main() -> None:
     global last_price_refresh
 
     logger.info("DOLPHIN BUY/SELL BOT RPC başladı.")
-    logger.info("Bot version: DOLPHIN-BUY-SELL-BOT/1.1-BILINGUAL-PASSIVE-READY")
+    logger.info("Bot version: DOLPHIN-BUY-SELL-BOT/1.2-HOLDER-READY")
     logger.info("BOT_ENABLED=%s | ANNOUNCE_BUYS=%s | ANNOUNCE_SELLS=%s", BOT_ENABLED, ANNOUNCE_BUYS, ANNOUNCE_SELLS)
     logger.info("GLOBAL_CHANNEL_ID=%s | TR_CHANNEL_ID=%s", GLOBAL_CHANNEL_ID or "Yok", TR_CHANNEL_ID or "Yok")
     logger.info("DEX adresleri: %s", ",".join(sorted(DEX_ADDRESSES)) if DEX_ADDRESSES else "Henüz girilmedi")
@@ -841,6 +841,8 @@ def main() -> None:
                 time.sleep(CHECK_INTERVAL)
                 continue
 
+            holders = get_holder_count()
+
             try:
                 pair = refresh_pair()
             except Exception as e:
@@ -848,8 +850,6 @@ def main() -> None:
                 last_checked_block = to_block
                 time.sleep(CHECK_INTERVAL)
                 continue
-
-            holders = get_holder_count()
 
             logs = get_all_transfer_logs_chunked(
                 from_block=from_block,
