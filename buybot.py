@@ -41,6 +41,12 @@ SELL_MEDIA_FILE = os.getenv("SELL_MEDIA_FILE", "dolphin_logo.jpg")
 SEND_MEDIA = os.getenv("SEND_MEDIA", "true").lower() == "true"
 
 HOLDERS_COUNT = os.getenv("HOLDERS_COUNT", "")
+MORALIS_BASE = "https://deep-index.moralis.io/api/v2.2"
+MORALIS_API_KEY = os.getenv("MORALIS_API_KEY", "")
+HOLDER_REFRESH_SECONDS = int(os.getenv("HOLDER_REFRESH_SECONDS", "1800"))
+
+cached_holders: Optional[int] = None
+last_holder_refresh = 0.0
 
 DEX_ADDRESSES_ENV = os.getenv("DEX_ADDRESSES", PAIR_ADDRESS)
 DEX_ADDRESSES = {
@@ -223,11 +229,56 @@ def refresh_pair() -> Dict[str, Any]:
 
 
 def get_holder_count() -> Optional[int]:
-    try:
-        if HOLDERS_COUNT:
-            return int(float(HOLDERS_COUNT))
-    except Exception:
-        return None
+    global cached_holders
+    global last_holder_refresh
+
+    now = time.time()
+
+    if cached_holders is not None and now - last_holder_refresh < HOLDER_REFRESH_SECONDS:
+        return cached_holders
+
+    if MORALIS_API_KEY:
+        try:
+            url = f"{MORALIS_BASE}/erc20/{TOKEN_ADDRESS}/holders"
+
+            headers = {
+                "accept": "application/json",
+                "X-API-Key": MORALIS_API_KEY,
+            }
+
+            params = {
+                "chain": CHAIN,
+            }
+
+            r = session.get(url, headers=headers, params=params, timeout=20)
+            r.raise_for_status()
+
+            data = r.json()
+
+            for key in ["totalHolders", "total_holders", "holder_count", "holders_count"]:
+                value = data.get(key)
+                if value is not None:
+                    holders = int(float(value))
+                    cached_holders = holders
+                    last_holder_refresh = now
+                    logger.info("Holders Moralis ile alındı: %s", holders)
+                    return holders
+
+            if isinstance(data.get("result"), dict):
+                for key in ["totalHolders", "total_holders", "holder_count", "holders_count"]:
+                    value = data["result"].get(key)
+                    if value is not None:
+                        holders = int(float(value))
+                        cached_holders = holders
+                        last_holder_refresh = now
+                        logger.info("Holders Moralis result içinden alındı: %s", holders)
+                        return holders
+
+            logger.warning("Moralis holders response parse edilemedi: %s", data)
+
+        except Exception as e:
+            logger.warning("Moralis holders hata: %s", e)
+
     return None
 
 
