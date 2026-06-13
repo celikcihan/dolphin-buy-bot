@@ -149,17 +149,27 @@ def send_telegram(text: str, chat_id: str, event_type: str) -> None:
     if not chat_id:
         return
 
-    media_file = BUY_MEDIA_FILE if event_type == "buy" else SELL_MEDIA_FILE
+    media_url = os.getenv("BUY_MEDIA_URL", "") if event_type == "buy" else os.getenv("SELL_MEDIA_URL", "")
+    media_mode = os.getenv("BUY_MEDIA_MODE", "text").lower() if event_type == "buy" else os.getenv("SELL_MEDIA_MODE", "text").lower()
 
-    if SEND_MEDIA and media_file and os.path.exists(media_file):
-        with open(media_file, "rb") as f:
-            payload = {
-                "chat_id": chat_id,
-                "caption": text,
-                "disable_web_page_preview": "true",
-            }
-            files = {"photo": f}
-            tg_post("sendPhoto", payload, files=files)
+    if media_url and media_mode in {"animation", "gif", "mp4"}:
+        payload = {
+            "chat_id": chat_id,
+            "animation": media_url,
+            "caption": text,
+            "disable_web_page_preview": True,
+        }
+        tg_post("sendAnimation", payload)
+        return
+
+    if media_url and media_mode in {"photo", "image"}:
+        payload = {
+            "chat_id": chat_id,
+            "photo": media_url,
+            "caption": text,
+            "disable_web_page_preview": True,
+        }
+        tg_post("sendPhoto", payload)
         return
 
     payload = {
